@@ -6,7 +6,11 @@ import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 
 export default defineConfig(
-  { ignores: ['**/node_modules', '**/dist', '**/out'] },
+  {
+    // The Omarchy plugin's JS is QML-flavoured (`.pragma library`), not plain JavaScript,
+    // so the JS toolchain cannot parse it.
+    ignores: ['**/node_modules', '**/dist', '**/out', 'packaging/omarchy/plugin/*.js']
+  },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],

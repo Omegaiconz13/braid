@@ -1,0 +1,284 @@
+#!/bin/bash
+# plexo-multipath — send the whole machine's default IPv4 traffic across every
+# live uplink at once, with Linux multipath ("nexthop") routes.
+#
+# This is the one privileged piece of the Plexo Omarchy plugin. It is installed
+# root-owned by packaging/omarchy/install.sh, together with a sudoers rule that
+# lets the download daemon run exactly this script as root without a password —
+# nothing else. Every subcommand is a fixed operation; there is no passthrough.
+#
+#   plexo-multipath plan     (any user)  what `up` would do, as JSON
+#   plexo-multipath status   (any user)  whether this script's routes are live
+#   plexo-multipath up       (root)      pin open connections, then share the default
+#   plexo-multipath down     (root)      remove this script's routes; NM takes over
+#
+# How it works, and what it deliberately does not touch:
+#   - Every route this script owns is tagged with a route protocol, so it can be
+#     found and removed surgically and never masks a NetworkManager route:
+#         proto 88  the multipath default route (metric 10, so it wins)
+#         proto 89  /32 pins for connections that were already open
+#   - Before the default route changes, every established TCP connection gets a
+#     /32 route through the uplink it was already using, so SSH sessions and
+#     live streams keep their source address and do not flip networks mid-flow.
+#     (New connections after that are spread by the kernel's per-flow hash.)
+#   - `net.ipv4.fib_multipath_hash_policy` is raised to 1 (L4) so that many
+#     connections between the same two hosts spread over the links, not just
+#     connections to different hosts. The previous value is restored on `down`.
+#   - A link only joins if it has a default route and NetworkManager rates its
+#     connectivity `full`; if none is full, every candidate joins, so a single
+#     half-rated link still works. One link alone is a valid setup: the route is
+#     then a plain default route (proto 88) and nothing about routing changes.
+#   - IPv6 is left alone: the kernel keeps using its own default route. Add
+#     IPv6 nexthops here once this machine's links carry usable global v6.
+set -u
+
+# Fixed PATH. This script runs as root through sudo; never resolve `ip`, `jq`
+# or anything else from an inheritable PATH.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+PROTO_DEFAULT=88
+PROTO_PIN=89
+METRIC_DEFAULT=10
+HASH_POLICY_FILE=/run/plexo-multipath.hash-policy
+
+JQ=$(command -v jq) || { echo 'plexo-multipath: jq is required' >&2; exit 1; }
+IP=$(command -v ip) || { echo 'plexo-multipath: iproute2 is required' >&2; exit 1; }
+SS=$(command -v ss) || true
+NMCLI=$(command -v nmcli) || true
+
+# NetworkManager's own internet verdict for one device: full, limited, portal,
+# none or unknown (empty when the device is not connected through NM).
+nm_connectivity() {
+  [ -n "$NMCLI" ] || { echo ""; return; }
+  "$NMCLI" -t -f DEVICE,IP4-CONNECTIVITY device status 2>/dev/null | awk -F: -v d="$1" '$1 == d {print $2; exit}'
+}
+
+# One JSON line per run, always. `emit ok up pins error [links-tsv]`
+emit() {
+  local ok="$1" up="$2" pins="$3" error="$4" links="${5:-}"
+  printf '{"ok":%s,"up":%s,"pins":%s,"error":%s,"links":' "$ok" "$up" "$pins" \
+    "$(printf '%s' "$error" | "$JQ" -Rsc .)"
+  if [ -n "$links" ]; then
+    printf '%s' "$(printf '%s' "$links" |
+      "$JQ" -Rsc '[split("\n")[] | select(length > 0) | split("\t") | {dev: .[0], via: .[1], src: .[2], weight: (.[3] // "1")}]')"
+  else
+    printf '[]'
+  fi
+  printf '}\n'
+}
+
+die() {
+  emit false false 0 "$1"
+  exit "${2:-1}"
+}
+
+# Everything that reaches `ip route` is checked first: the values come from the
+# kernel, but a parser slip must never turn into a route to the wrong place.
+is_ipv4() {
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] &&
+    (( 10#${BASH_REMATCH[1]} < 256 && 10#${BASH_REMATCH[2]} < 256 &&
+       10#${BASH_REMATCH[3]} < 256 && 10#${BASH_REMATCH[4]} < 256 ))
+}
+is_ifname() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$ ]]
+}
+
+# `read` with a tab IFS collapses an empty field between two present ones, which
+# would shift columns; link_rows and pin_rows write "-" for "none" instead, and
+# this turns it back into an empty value.
+unmark() { if [ "$1" = "-" ]; then printf ''; else printf '%s' "$1"; fi; }
+
+# dev<TAB>via<TAB>src: one line per uplink that currently has a default
+# route, best metric per device, in that order.
+link_rows() {
+  "$IP" -4 route show default | awk '
+    {
+      dev = ""; via = ""; src = ""; metric = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i == "dev")    dev    = $(i + 1)
+        if ($i == "via")    via    = $(i + 1)
+        if ($i == "src")    src    = $(i + 1)
+        if ($i == "metric") metric = $(i + 1)
+      }
+      if (dev != "") printf "%s\t%s\t%s\t%s\n", dev, (via == "" ? "-" : via), (src == "" ? "-" : src), (metric == "" ? 0 : metric)
+    }' | sort -t "$(printf '\t')" -k4 -n | awk -F '\t' '!seen[$1]++'
+}
+
+# dev<TAB>via<TAB>src<TAB>1 : the links `up` would install. A candidate is any
+# device with a default route; when NetworkManager reports its internet
+# connectivity, only devices it rates `full` are kept (falling back to every
+# candidate when none is full, so a single half-rated link still works).
+live_links() {
+  local dev via src rows="" full="" conn
+  while IFS="$(printf '\t')" read -r dev via src _; do
+    via=$(unmark "$via")
+    src=$(unmark "$src")
+    [ -n "$via" ] || continue
+    is_ifname "$dev" || continue
+    is_ipv4 "$via" || continue
+    if [ -n "$src" ] && ! is_ipv4 "$src"; then continue; fi
+    rows="$rows$dev	$via	$src	1
+"
+    conn=$(nm_connectivity "$dev")
+    if [ "$conn" = "full" ]; then
+      full="$full$dev	$via	$src	1
+"
+    fi
+  done <<< "$(link_rows)"
+  if [ -n "$full" ]; then
+    printf '%s' "$full"
+  else
+    printf '%s' "$rows"
+  fi
+}
+
+# peer<TAB>dev<TAB>via<TAB>src : /32 pins for established outbound connections,
+# one per peer address, through the uplink each connection is using right now.
+pin_rows() {
+  [ -n "$SS" ] || return 0
+  local addrs
+  # Every local address of every interface, iface<TAB>addr.
+  addrs=$("$IP" -4 -o addr show | awk '{print $2 "\t" $4}' | cut -d/ -f1)
+  local peer local_ip dev via src
+  # The last two columns of `ss` are local and peer address:port, whatever the
+  # version decides to print before them.
+  "$SS" -Htn state established 2>/dev/null | awk '{print $(NF-1) "\t" $NF}' | sort -u |
+  while IFS="$(printf '\t')" read -r ours theirs; do
+    # IPv4 only in this version; ports are stripped.
+    case "$theirs" in *:*:*) continue ;; esac
+    case "$ours" in *:*:*) continue ;; esac
+    local_ip="${ours%:*}"
+    peer="${theirs%:*}"
+    case "$local_ip" in ""|0.0.0.0|127.*) continue ;; esac
+    case "$peer" in ""|127.*|0.0.0.0) continue ;; esac
+    dev=$(printf '%s\n' "$addrs" | awk -v ip="$local_ip" -F '\t' '$2 == ip {print $1; exit}')
+    [ -n "$dev" ] || continue
+    printf '%s\t%s\n' "$peer" "$dev"
+  done | while IFS="$(printf '\t')" read -r peer dev; do
+    is_ipv4 "$peer" || continue
+    is_ifname "$dev" || continue
+    src=$("$IP" -4 addr show "$dev" | awk '/inet /{print $2; exit}' | cut -d/ -f1)
+    via=$(link_rows | awk -v d="$dev" -F '\t' '$1 == d {print $2; exit}')
+    via=$(unmark "$via")
+    if [ -n "$via" ] && ! is_ipv4 "$via"; then continue; fi
+    if [ -n "$src" ] && ! is_ipv4 "$src"; then continue; fi
+    [ -n "$via" ] || via=-
+    [ -n "$src" ] || src=-
+    printf '%s\t%s\t%s\t%s\n' "$peer" "$dev" "$via" "$src"
+  done
+}
+
+pin_count() {
+  "$IP" -4 route show proto "$PROTO_PIN" 2>/dev/null | grep -c . || true
+}
+
+# Read-only: the nexthops of the default route this script owns. Uses `ip -j`
+# because a route with a single nexthop — exactly the one-link case — is printed
+# by iproute2 as a plain route with no `nexthop` keyword, which a text parser
+# would read as "nothing installed".
+status_core() {
+  local raw count rows
+  raw=$("$IP" -j -4 route show default proto "$PROTO_DEFAULT" 2>/dev/null)
+  [ -n "$raw" ] || raw='[]'
+  count=$(printf '%s' "$raw" | "$JQ" 'length' 2>/dev/null || echo 0)
+  if [ "${count:-0}" -gt 0 ] 2>/dev/null; then
+    rows=$(printf '%s' "$raw" | "$JQ" -r '
+      .[0] as $route
+      | ($route.nexthops // [$route])
+      | .[]
+      | "\(.dev // "")\t\(.gateway // "")\t\t\(.weight // 1)"' 2>/dev/null)
+    emit true true "$(pin_count)" "" "$rows"
+  else
+    emit true false "$(pin_count)" ""
+  fi
+}
+
+case "${1:-}" in
+  plan)
+    links=$(live_links)
+    count=$(printf '%s' "$links" | grep -c . || true)
+    if [ "$count" -eq 0 ]; then
+      die 'no uplink with a default route and working connectivity was found' 2
+    fi
+    pins=$(pin_rows | grep -c . || true)
+    emit true false "$pins" "" "$links"
+    ;;
+
+  status)
+    status_core
+    ;;
+
+  up)
+    [ "$(id -u)" -eq 0 ] || die 'must run as root (the daemon calls this through sudo)' 3
+
+    links=$(live_links)
+    count=$(printf '%s' "$links" | grep -c . || true)
+    if [ "$count" -eq 0 ]; then
+      die 'no uplink with a default route and working connectivity was found' 2
+    fi
+
+    # L4 flow hashing, so parallel connections to one host spread too. The
+    # previous value is kept for `down`.
+    if [ ! -f "$HASH_POLICY_FILE" ]; then
+      sysctl -n net.ipv4.fib_multipath_hash_policy >"$HASH_POLICY_FILE" 2>/dev/null || true
+    fi
+    sysctl -qw net.ipv4.fib_multipath_hash_policy=1 2>/dev/null || true
+
+    # Pin connections that are already open before the default route changes:
+    # each keeps the uplink (and source address) it started on. Pins for
+    # connections that have since ended are left behind until `down`; they only
+    # mean a later connection to that peer goes through that uplink, which is
+    # still a working one.
+    while IFS="$(printf '\t')" read -r peer dev via src; do
+      via=$(unmark "$via")
+      src=$(unmark "$src")
+      [ -n "$peer" ] || continue
+      is_ipv4 "$peer" || continue
+      is_ifname "$dev" || continue
+      if [ -n "$via" ]; then
+        "$IP" route replace "$peer/32" proto "$PROTO_PIN" via "$via" dev "$dev" ${src:+src "$src"} 2>/dev/null || true
+      else
+        "$IP" route replace "$peer/32" proto "$PROTO_PIN" dev "$dev" ${src:+src "$src"} 2>/dev/null || true
+      fi
+    done <<< "$(pin_rows)"
+
+    # The multipath default: one nexthop per live uplink, equal weights. With a
+    # single uplink this is an ordinary default route that happens to be ours.
+    args=(-4 route replace default proto "$PROTO_DEFAULT" metric "$METRIC_DEFAULT")
+    while IFS="$(printf '\t')" read -r dev via src weight; do
+      [ -n "$dev" ] || continue
+      is_ifname "$dev" || continue
+      is_ipv4 "$via" || continue
+      case "$weight" in ''|*[!0-9]*) weight=1 ;; esac
+      args+=(nexthop via "$via" dev "$dev" weight "$weight")
+    done <<< "$links"
+    if ! "$IP" "${args[@]}"; then
+      die 'could not install the multipath default route' 4
+    fi
+
+    status_core
+    ;;
+
+  down)
+    [ "$(id -u)" -eq 0 ] || die 'must run as root (the daemon calls this through sudo)' 3
+
+    # Everything this script owns is tagged proto 88/89; flushing those leaves
+    # NetworkManager's own routes untouched, and its defaults become the
+    # default again the moment ours are gone.
+    "$IP" -4 route flush proto "$PROTO_DEFAULT" 2>/dev/null || true
+    "$IP" -4 route flush proto "$PROTO_PIN" 2>/dev/null || true
+
+    # Restore the flow-hash policy that was in force before `up`.
+    if [ -f "$HASH_POLICY_FILE" ]; then
+      previous=$(cat "$HASH_POLICY_FILE" 2>/dev/null)
+      case "$previous" in 0|1) sysctl -qw "net.ipv4.fib_multipath_hash_policy=$previous" 2>/dev/null || true ;; esac
+      rm -f "$HASH_POLICY_FILE"
+    fi
+
+    status_core
+    ;;
+
+  *)
+    die "unknown command: '${1:-}' (expected plan, status, up or down)" 64
+    ;;
+esac

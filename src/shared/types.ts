@@ -352,6 +352,9 @@ export interface AppSettings {
   /** How speeds are shown everywhere; sizes stay in bytes either way. */
   speedUnit?: SpeedUnit
   browserExtensionUsed?: boolean
+  /** Route the whole machine's traffic across every live uplink (the Omarchy plugin's
+   * system-wide mode). Written by the daemon when the mode is toggled; re-applied on start. */
+  multipathEnabled?: boolean
 }
 
 /** bytes: MB/s. bits: Mbps, as internet plans and speed tests count them. */

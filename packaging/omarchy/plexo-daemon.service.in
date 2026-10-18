@@ -1,0 +1,21 @@
+[Unit]
+Description=Plexo multi-network download daemon
+Documentation=file://@PLEXO_DIR@/packaging/omarchy/README.md
+
+[Service]
+Type=simple
+ExecStart=@NODE@ @PLEXO_DIR@/out/daemon/app/daemon/index.js
+# While the Plexo app is open the daemon stands down with a clean exit, so a
+# restart is what brings it back after the app closes. It also restarts after
+# a crash, which is when downloads should keep going on their own.
+Restart=always
+RestartSec=15
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# The engine binds sockets to interfaces (SO_BINDTODEVICE) and nothing more.
+# NoNewPrivileges must stay off: system-wide mode runs exactly one root helper
+# through `sudo -n`, bounded by /etc/sudoers.d/plexo-multipath to that script.
+NoNewPrivileges=false
+
+[Install]
+WantedBy=default.target

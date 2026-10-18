@@ -6,3 +6,5 @@ tsconfig.json
 tsconfig.*.json
 test-results
 playwright-report
+# QML-flavoured JS (`.pragma library`); not parseable as plain JavaScript
+packaging/omarchy/plugin/*.js

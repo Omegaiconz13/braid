@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "omega.plexo",
+  "name": "Plexo",
+  "version": "0.1.0",
+  "author": "omega",
+  "license": "MIT",
+  "description": "Multi-network downloads, from the bar. Shows the Plexo daemon's combined speed across every connected network, lets you start and control downloads, and turns individual links on or off. The daemon keeps downloading while the Plexo app is closed.",
+  "kinds": ["bar-widget", "panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Plexo",
+    "description": "Combined download speed over every network. Click for downloads and per-link control.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
