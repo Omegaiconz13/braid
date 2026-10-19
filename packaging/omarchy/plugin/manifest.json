@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "omega.plexo",
-  "name": "Plexo",
+  "id": "omega.braid",
+  "name": "Braid",
   "version": "0.1.0",
   "author": "omega",
   "license": "MIT",
-  "description": "Multi-network downloads, from the bar. Shows the Plexo daemon's combined speed across every connected network, lets you start and control downloads, and turns individual links on or off. The daemon keeps downloading while the Plexo app is closed.",
+  "description": "Multi-network downloads, from the bar. Braid drives Plexo's engine headlessly (built on Plexo by Anmol Kapil, MIT): combined speed across every connected network, start and control downloads, and optionally send every app's traffic over all links at once.",
   "kinds": ["bar-widget", "panel"],
   "keepLoaded": true,
   "entryPoints": {
@@ -13,7 +13,7 @@
     "panel": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Plexo",
+    "displayName": "Braid",
     "description": "Combined download speed over every network. Click for downloads and per-link control.",
     "category": "Network",
     "allowMultiple": false,

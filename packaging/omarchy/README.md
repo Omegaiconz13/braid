@@ -1,11 +1,12 @@
-# Plexo as an Omarchy plugin
+# Braid — Plexo's engine, as an Omarchy plugin
 
-Two pieces, so Plexo works with no window open:
+Braid puts **[Plexo](https://github.com/anmolkapil/plexo)**'s download engine on
+the Omarchy bar, with no window open. Two pieces:
 
 | Piece              | What it is                                                                                                                                                             |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`plexo-daemon`** | The download engine from `src/main/`, running under plain Node as a systemd **user** service. No Electron, no window — this is what downloads while the app is closed. |
-| **`omega.plexo`**  | A Quickshell plugin: a bar widget with the combined speed, and a panel for networks, live per-link speeds, and download controls.                                      |
+| **`omega.braid`**  | The Quickshell plugin: a bar widget with the combined speed, and a panel for networks, live per-link speeds, and download controls.                                    |
 
 ```
 plexo-ctl ──┐
@@ -18,10 +19,21 @@ bar plugin ─┘        │
         ~/.config/Plexo  (the app's own settings, history, saved progress)
 ```
 
+## Credit
+
+Braid is built on **[Plexo](https://github.com/anmolkapil/plexo)** — the app, the
+download engine in `src/main/`, and the bulk of this repository are **Anmol
+Kapil**'s work, MIT licensed. All upstream credit belongs to him; this packaging
+only adds the Omarchy plugin, the headless daemon scaffolding and the
+system-wide multipath helper. The original readme is kept as
+[README.plexo.md](../../README.plexo.md); if you like what this does, star the
+upstream project too.
+
 ## Install
 
 ```bash
-cd <plexo checkout>
+git clone https://github.com/Omegaiconz13/braid
+cd braid
 npm ci --ignore-scripts && npx patch-package   # once; the patches teach the
                                                # torrent engine to pin peers
 ./packaging/omarchy/install.sh
@@ -29,8 +41,9 @@ npm ci --ignore-scripts && npx patch-package   # once; the patches teach the
 
 The installer builds the daemon (`npm run build:daemon`), installs `plexo-ctl`
 into `~/.local/bin`, writes and starts `plexo-daemon.service` as a user unit,
-copies the plugin to `~/.config/omarchy/plugins/omega.plexo/`, and enables it in
-the bar. Re-run it after `git pull`. Undo everything with
+copies the plugin to `~/.config/omarchy/plugins/omega.braid/`, and enables it in
+the bar (it also cleans up the pre-rename `omega.plexo` install, if there is
+one). Re-run it after `git pull`. Undo everything with
 `./packaging/omarchy/uninstall.sh` (downloads and settings stay).
 
 Its last step offers to install one root-owned helper (it asks for `sudo` once)
@@ -115,6 +128,10 @@ Honest limits:
   still uses one network. Spreading one connection over several links needs a
   relay server on the internet side — that is a different project, not
   something a client-side plugin can do.
+- A link that is up but barely passing traffic can slow some connections until
+  the engine's per-link stream logic moves the work to the healthy link (Braid
+  probes and retires crawling streams automatically; Plexo's own downloads are
+  bound per interface, so each link carries only its own streams).
 - IPv6 keeps using its own default route; only IPv4 is balanced.
 - Route changes are system-wide by nature: if the helper is installed the switch
   works, but the first time you toggle it on, expect a one-second blip on
@@ -145,7 +162,7 @@ If the daemon isn't running, the panel says so and offers to start it.
 | "DAEMON NOT RUNNING"                                | `systemctl --user start plexo-daemon`, then `journalctl --user -u plexo-daemon -n 50`.                                                                         |
 | Daemon exits seconds after starting                 | The Plexo app is open (that's the stand-down). Close it; the unit restarts the daemon.                                                                         |
 | A second network isn't used                         | `plexo-ctl status` → both links must have addresses; in the panel, both chips must be lit. A server that refuses byte ranges gets a single stream on one link. |
-| Plugin missing from the bar                         | `omarchy plugin list`, then `omarchy plugin enable omega.plexo --section right`.                                                                               |
+| Plugin missing from the bar                         | `omarchy plugin list`, then `omarchy plugin enable omega.braid --section right`.                                                                               |
 | System-wide switch says setup is needed             | The root helper isn't installed yet — re-run `./packaging/omarchy/install.sh` and accept the one `sudo` step.                                                  |
 | System-wide switch went off by itself after a while | The daemon re-applies it on restarts and link changes; if a link drops, the mode stays up with the remaining links. Check `plexo-ctl status` → `systemWide`.   |
 | Nothing downloads                                   | Check disk space (`plexo-ctl freeSpace '{"dir":"/home"}'`) and that the destination folder exists.                                                             |

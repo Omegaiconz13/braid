@@ -3,14 +3,14 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
-import "Plexo.js" as Fmt
+import "Braid.js" as Fmt
 
-// The Plexo bar widget: one mark plus the combined speed while the daemon
+// The Braid bar widget: one mark plus the combined speed while the daemon
 // downloads. Click opens the panel. The widget owns the single long-lived
 // `plexo-ctl watch` process; the panel reads its state through hostWidget.
 BarWidget {
   id: root
-  moduleName: "omega.plexo"
+  moduleName: "omega.braid"
 
   // ---------- daemon connection ----------
 
@@ -137,7 +137,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "omega.plexo"
+    target: "omega.braid"
 
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -159,8 +159,8 @@ BarWidget {
   }
 
   readonly property string tooltip: {
-    if (!connected) return "Plexo · daemon not running"
-    var lines = ["Plexo · " + (networks.length === 1 ? "1 network" : networks.length + " networks")]
+    if (!connected) return "Braid · daemon not running"
+    var lines = ["Braid · " + (networks.length === 1 ? "1 network" : networks.length + " networks")]
     for (var i = 0; i < networks.length; i++) {
       var network = networks[i]
       lines.push("  " + (network.displayName || network.device) + " · " + network.addresses.map(function (a) {
