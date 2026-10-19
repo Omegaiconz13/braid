@@ -51,7 +51,7 @@ function classifyLinuxDevice(device: string): NetworkInterfaceKind {
   if (/^wl/.test(device)) return 'wifi'
   if (/^usb|^enx|^en\w*u\d/.test(device)) return 'usb'
   if (/^(en|eth)/.test(device)) return 'ethernet'
-  if (/^(br|virbr)/.test(device)) return 'bridge'
+  if (/^(br|virbr|docker|veth)/.test(device)) return 'bridge'
   return 'other'
 }
 
@@ -60,7 +60,8 @@ function classifyInterface(hardwarePortName: string): NetworkInterfaceKind {
   if (/wi-?fi|wireless|wlan|802\.11|airport/.test(name)) return 'wifi'
   if (/rndis|remote ndis|tether|apple mobile device/.test(name)) return 'usb'
   if (name.includes('iphone') || name.includes('ipad') || name.includes('usb')) return 'usb'
-  if (name.includes('bridge')) return 'bridge'
+  if (name.includes('bridge') || name.includes('hyper-v') || name.includes('vethernet'))
+    return 'bridge'
   if (name.includes('ethernet') || name.includes('lan')) return 'ethernet'
   return 'other'
 }
@@ -167,6 +168,10 @@ export async function listActiveInterfaces(): Promise<NetworkInterfaceInfo[]> {
     // NDIS media: 1 = wireless LAN, 9 = native 802.11, 14 = Ethernet (802.3).
     if (adapter?.NdisPhysicalMedium === 1 || adapter?.NdisPhysicalMedium === 9) kind = 'wifi'
     else if (kind === 'other' && adapter?.NdisPhysicalMedium === 14) kind = 'ethernet'
+    // A bridge is a virtual switch for containers and VMs (docker0, br-…, virbr0, a Hyper-V or
+    // Thunderbolt bridge), never an internet uplink: it is offered as a download device that
+    // leads nowhere real, and its traffic is a container's, not the machine's internet.
+    if (kind === 'bridge') continue
     result.push({
       id: device,
       device,
