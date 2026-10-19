@@ -32,12 +32,27 @@ Panel {
   readonly property var networks: host ? (host.networks || []) : []
   readonly property var preferences: host ? (host.networkPreferences || {}) : ({})
   readonly property real totalSpeed: host ? (host.speed || 0) : 0
+  readonly property var throughput: host ? (host.throughput || null) : null
+  readonly property real internetRx: throughput ? (throughput.rxBytesPerSec || 0) : 0
   readonly property var systemWide: host ? (host.systemWide || null) : null
   readonly property bool systemWideOn: systemWide ? systemWide.on === true : false
   readonly property var systemWideLinks: systemWide && systemWide.links ? systemWide.links : []
 
   property string linkText: ""
   property string notice: ""
+
+  /** This link's live traffic from the daemon's meter, or null before the first tick. */
+  function linkRate(id) {
+    var list = throughput && throughput.networks ? throughput.networks : []
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
+    return null
+  }
+
+  function linkDownText(id) {
+    var rate = linkRate(id)
+    if (!rate) return ""
+    return "↓ " + (Fmt.fmtSpeed(rate.rxBytesPerSec) || "0 B/s")
+  }
 
   // Panel actions go through `plexo-ctl` one at a time, and a refusal (bad
   // link, daemon gone, helper missing) becomes `notice` instead of being
@@ -177,7 +192,10 @@ Panel {
             Text {
               textFormat: Text.PlainText
               text: root.connected
-                ? (Fmt.linksLine(root.networks) + (root.totalSpeed > 0 ? " · " + Fmt.fmtSpeed(root.totalSpeed) : " · IDLE"))
+                ? (Fmt.linksLine(root.networks) +
+                   (root.totalSpeed > 0
+                     ? " · " + Fmt.fmtSpeed(root.totalSpeed)
+                     : (root.internetRx >= 10240 ? " · ↓ " + Fmt.fmtSpeed(root.internetRx) : " · IDLE")))
                 : "DAEMON NOT RUNNING"
               color: root.connected ? Qt.darker(root.fg, 1.4) : Color.urgent
               font.family: root.ff
@@ -285,6 +303,15 @@ Panel {
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
                   }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.linkDownText(modelData.id)
+                  visible: text !== ""
+                  color: Qt.darker(root.fg, 1.4)
+                  font.family: root.ff
+                  font.pixelSize: Style.font.caption
                 }
 
                 ToggleSwitch {

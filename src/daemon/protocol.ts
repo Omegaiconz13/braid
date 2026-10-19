@@ -81,6 +81,13 @@ export interface DaemonStatus {
   downloads: DownloadSummary[]
   /** Download here means the daemon: bytes a second over every running download. */
   speedBytesPerSec: number
+  /** The whole machine this second: live traffic over every connected network — all apps, not
+   * only Braid's downloads — with the same reading split per network. */
+  throughput: {
+    rxBytesPerSec: number
+    txBytesPerSec: number
+    networks: { id: string; rxBytesPerSec: number; txBytesPerSec: number }[]
+  }
 }
 
 /** `$XDG_RUNTIME_DIR/plexo-daemon-<uid>.sock`, or PLEXO_SOCKET when set (tests use a private

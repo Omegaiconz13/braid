@@ -6,7 +6,7 @@ the Omarchy bar, with no window open. Two pieces:
 | Piece              | What it is                                                                                                                                                             |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`plexo-daemon`** | The download engine from `src/main/`, running under plain Node as a systemd **user** service. No Electron, no window — this is what downloads while the app is closed. |
-| **`omega.braid`**  | The Quickshell plugin: a bar widget with the combined speed, and a panel for networks, live per-link speeds, and download controls.                                    |
+| **`omega.braid`**  | The Quickshell plugin: a bar widget with the machine's live internet speed (all apps, every network) and a panel for networks, per-link speeds, and download controls. |
 
 ```
 plexo-ctl ──┐

@@ -5,9 +5,10 @@ import qs.Commons
 import qs.Ui
 import "Braid.js" as Fmt
 
-// The Braid bar widget: one mark plus the combined speed while the daemon
-// downloads. Click opens the panel. The widget owns the single long-lived
-// `plexo-ctl watch` process; the panel reads its state through hostWidget.
+// The Braid bar widget: one mark plus the machine's live internet speed — all
+// traffic over every connected network, not just Braid's own downloads. Click
+// opens the panel. The widget owns the single long-lived `plexo-ctl watch`
+// process; the panel reads its state through hostWidget.
 BarWidget {
   id: root
   moduleName: "omega.braid"
@@ -24,6 +25,18 @@ BarWidget {
   readonly property var networks: status ? (status.networks || []) : []
   readonly property var networkPreferences: status ? (status.networkPreferences || {}) : ({})
   readonly property real speed: status ? (status.speedBytesPerSec || 0) : 0
+  // The whole machine this second: live traffic over every connected network.
+  readonly property var throughput: status ? (status.throughput || null) : null
+  readonly property real internetRx: throughput ? (throughput.rxBytesPerSec || 0) : 0
+  readonly property real internetTx: throughput ? (throughput.txBytesPerSec || 0) : 0
+  /** Under this, the bar number is hidden so idle background chatter doesn't flicker it. */
+  readonly property real speedFloor: 10 * 1024
+  /** This link's live traffic from the daemon's meter, or null before the first tick. */
+  function linkRate(id) {
+    var list = throughput && throughput.networks ? throughput.networks : []
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
+    return null
+  }
   readonly property var systemWide: status ? (status.systemWide || null) : null
   readonly property bool systemWideOn: systemWide ? systemWide.on === true : false
   readonly property var systemWideLinks: systemWide && systemWide.links ? systemWide.links : []
@@ -151,19 +164,32 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  // The mark carries the machine's live internet speed — everything, not only Braid's own
+  // downloads. Below a low floor the number stays hidden so background chatter doesn't
+  // flicker the label; a running download too quiet for a number shows "…" instead.
   readonly property string label: {
     if (!connected) return "󰇚"
-    if (busy) return "󰇚 " + (Fmt.fmtSpeed(speed) || "…")
-    if (systemWideOn && systemWideLinks.length > 1) return "󰇚×" + systemWideLinks.length
-    return "󰇚"
+    var mark = "󰇚" + (systemWideOn && systemWideLinks.length > 1 ? "×" + systemWideLinks.length : "")
+    if (internetRx >= speedFloor) return mark + " " + Fmt.fmtSpeed(internetRx)
+    if (busy) return mark + " …"
+    return mark
   }
 
   readonly property string tooltip: {
     if (!connected) return "Braid · daemon not running"
-    var lines = ["Braid · " + (networks.length === 1 ? "1 network" : networks.length + " networks")]
+    var lines = ["Braid · internet ↓ " + (Fmt.fmtSpeed(internetRx) || "0 B/s") + " ↑ " +
+                 (Fmt.fmtSpeed(internetTx) || "0 B/s")]
+    lines.push(networks.length === 1 ? "1 network" : networks.length + " networks")
     for (var i = 0; i < networks.length; i++) {
       var network = networks[i]
-      lines.push("  " + (network.displayName || network.device) + " · " + network.addresses.map(function (a) {
+      var rate = linkRate(network.id)
+      var speeds = ""
+      if (rate) {
+        var down = Fmt.fmtSpeed(rate.rxBytesPerSec)
+        var up = Fmt.fmtSpeed(rate.txBytesPerSec)
+        if (down || up) speeds = " " + (down ? "↓ " + down : "") + (up ? (down ? " " : "") + "↑ " + up : "")
+      }
+      lines.push("  " + (network.displayName || network.device) + speeds + " · " + network.addresses.map(function (a) {
         return a.address
       }).join(", "))
     }

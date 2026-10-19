@@ -25,6 +25,7 @@ import { IpcChannels } from '../shared/ipc-channels'
 import { socketPath, type DaemonStatus, type DownloadSummary } from './protocol'
 import { ControlServer, type DaemonHandler } from './server'
 import { Multipath } from './systemWide'
+import { ThroughputMeter, type ThroughputSnapshot } from './throughput'
 
 const STATUS_TICK_MS = 1000
 const startedAt = Date.now()
@@ -238,6 +239,9 @@ async function main(): Promise<void> {
   manager = new DownloadManager(() => windowStub, networks)
   await manager.applySettings(await loadSettings())
   const bindingSupport = await deviceBindingSupported()
+  const throughput = new ThroughputMeter()
+  // Sampled on the status tick below; a status request in between reads the latest second.
+  let throughputSnapshot: ThroughputSnapshot = { rxBytesPerSec: 0, txBytesPerSec: 0, networks: [] }
 
   const statusNow = async (): Promise<DaemonStatus> => {
     const downloads = (await manager.listDownloads()).map(summarize)
@@ -264,7 +268,8 @@ async function main(): Promise<void> {
       networkPreferences: settings.networkPreferences ?? {},
       systemWide: await multipath.state(),
       downloads,
-      speedBytesPerSec: downloads.reduce((sum, download) => sum + download.speedBytesPerSec, 0)
+      speedBytesPerSec: downloads.reduce((sum, download) => sum + download.speedBytesPerSec, 0),
+      throughput: throughputSnapshot
     }
   }
 
@@ -349,6 +354,9 @@ async function main(): Promise<void> {
   }
 
   const tick = setInterval(() => {
+    // Sample even with no clients hooked up: a few sysfs reads a second keep the meter warm,
+    // so a client that connects a moment later sees a real rate instead of a zero.
+    throughputSnapshot = throughput.sample((networks.current ?? []).map((network) => network.id))
     const active = server
     if (!active || active.clientCount === 0) return
     // A client that goes away mid-tick is not an error.

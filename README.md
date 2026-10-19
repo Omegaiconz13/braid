@@ -8,13 +8,13 @@ Braid is the Omarchy face of **[Plexo](https://github.com/anmolkapil/plexo)**'s
 download engine: a Quickshell plugin (`omega.braid`) plus a headless daemon
 (`plexo-daemon`) that runs the engine under plain Node as a systemd user
 service. No window needed — downloads keep running, resume after a reboot, and
-the bar shows the combined speed across every network.
+the bar shows the machine's live internet speed across every network.
 
-| Piece                | What it is                                                                                                                                      |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`plexo-daemon`**   | Plexo's engine (HTTP + torrent, sockets bound per interface) under plain Node, as a systemd user service. Downloads while the app is closed.    |
-| **`omega.braid`**    | The Quickshell plugin: a bar widget with the combined speed, and a panel with downloads, per-link speeds and controls.                          |
-| **System-wide mode** | Optional: a multipath default route over every live uplink, so all apps' connections spread across links (root helper + narrowed sudoers rule). |
+| Piece                | What it is                                                                                                                                                 |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`plexo-daemon`**   | Plexo's engine (HTTP + torrent, sockets bound per interface) under plain Node, as a systemd user service. Downloads while the app is closed.               |
+| **`omega.braid`**    | The Quickshell plugin: a bar widget showing the machine's live internet speed across every link, and a panel with downloads, per-link speeds and controls. |
+| **System-wide mode** | Optional: a multipath default route over every live uplink, so all apps' connections spread across links (root helper + narrowed sudoers rule).            |
 
 ## Credit
 
