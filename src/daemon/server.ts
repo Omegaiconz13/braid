@@ -74,12 +74,16 @@ export class ControlServer {
     try {
       reply({ id: request.id, ok: true, result: await handler(request.params) })
     } catch (error) {
-      // Logged with its stack: the wire only carries the message, which some errors leave empty.
+      // Logged with its stack: the wire only carries the message, which some errors leave empty
+      // (an AggregateError from a connect attempt reports nothing on its own).
       console.error(`[plexo-daemon] ${request.method} failed`, error)
       reply({
         id: request.id,
         ok: false,
-        error: error instanceof Error ? error.message : String(error)
+        error:
+          error instanceof Error
+            ? error.message || error.name || 'The request failed'
+            : String(error)
       })
     }
   }

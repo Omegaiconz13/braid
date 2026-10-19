@@ -10,6 +10,7 @@
  */
 import { existsSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, statfs } from 'node:fs/promises'
+import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { BrowserWindow } from 'electron'
@@ -183,6 +184,14 @@ async function startFromUrl(params: StartParams, networks: NetworkMonitor): Prom
 }
 
 async function main(): Promise<void> {
+  // Node's Happy-Eyeballs races a host's address families with a 500 ms cut-off per attempt,
+  // shorter than one TCP handshake over a slow link (a congested Wi-Fi round trip runs past
+  // 600 ms). The probe that starts every download connects through the OS route — which, with
+  // several links in the default route, may well be that slow one — and would die as ETIMEDOUT
+  // before ever connecting. Three seconds still falls over quickly when a family truly hangs.
+  // The engine's chunk connections pin their own device and never take this path.
+  setDefaultAutoSelectFamilyAttemptTimeout(3000)
+
   const userData = app.getPath('userData')
   await mkdir(userData, { recursive: true })
 
