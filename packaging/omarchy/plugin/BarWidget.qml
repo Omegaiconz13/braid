@@ -3,15 +3,15 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
-import "Braid.js" as Fmt
+import "Plexo.js" as Fmt
 
-// The Braid bar widget: one mark plus the machine's live internet speed — all
-// traffic over every connected network, not just Braid's own downloads. Click
-// opens the panel. The widget owns the single long-lived `plexo-ctl watch`
-// process; the panel reads its state through hostWidget.
+// The Omega Plexo bar widget: one mark plus the machine's live internet speed —
+// all traffic over every connected network, not just Omega Plexo's own
+// downloads. Click opens the panel. The widget owns the single long-lived
+// `plexo-ctl watch` process; the panel reads its state through hostWidget.
 BarWidget {
   id: root
-  moduleName: "omega.braid"
+  moduleName: "omega.plexo"
 
   // ---------- daemon connection ----------
 
@@ -150,7 +150,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "omega.braid"
+    target: "omega.plexo"
 
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -164,7 +164,7 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  // The mark carries the machine's live internet speed — everything, not only Braid's own
+  // The mark carries the machine's live internet speed — everything, not only Omega Plexo's own
   // downloads. Below a low floor the number stays hidden so background chatter doesn't
   // flicker the label; a running download too quiet for a number shows "…" instead.
   readonly property string label: {
@@ -176,8 +176,8 @@ BarWidget {
   }
 
   readonly property string tooltip: {
-    if (!connected) return "Braid · daemon not running"
-    var lines = ["Braid · internet ↓ " + (Fmt.fmtSpeed(internetRx) || "0 B/s") + " ↑ " +
+    if (!connected) return "Omega Plexo · daemon not running"
+    var lines = ["Omega Plexo · internet ↓ " + (Fmt.fmtSpeed(internetRx) || "0 B/s") + " ↑ " +
                  (Fmt.fmtSpeed(internetTx) || "0 B/s")]
     lines.push(networks.length === 1 ? "1 network" : networks.length + " networks")
     for (var i = 0; i < networks.length; i++) {

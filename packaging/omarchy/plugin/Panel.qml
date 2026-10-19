@@ -7,14 +7,14 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
-import "Braid.js" as Fmt
+import "Plexo.js" as Fmt
 
-// The Braid panel: what the daemon is doing and the controls for it. It reads
+// The Omega Plexo panel: what the daemon is doing and the controls for it. It reads
 // live state from its bar widget (hostWidget), which owns the watch process.
 Panel {
   id: root
-  moduleName: "omega.braid"
-  ipcTarget: "omega.braid"
+  moduleName: "omega.plexo"
+  ipcTarget: "omega.plexo"
   // The bar widget owns the plugin's single IpcHandler.
   manageIpc: false
 
@@ -180,7 +180,7 @@ Panel {
             spacing: Style.space(2)
 
             Text {
-              text: "Braid"
+              text: "Omega Plexo"
               color: root.fg
               font.family: root.ff
               font.pixelSize: Style.font.title
