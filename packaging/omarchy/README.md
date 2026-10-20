@@ -32,8 +32,8 @@ upstream project too.
 ## Install
 
 ```bash
-git clone https://github.com/Omegaiconz13/braid
-cd braid
+git clone https://github.com/Omegaiconz13/omega-plexo
+cd omega-plexo
 npm ci --ignore-scripts && npx patch-package   # once; the patches teach the
                                                # torrent engine to pin peers
 ./packaging/omarchy/install.sh
