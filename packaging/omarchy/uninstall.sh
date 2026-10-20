@@ -3,7 +3,7 @@
 # in ~/.config/Plexo are left alone.
 set -euo pipefail
 
-PLUGIN_ID="omega.plexo"
+PLUGIN_ID="omega.oma-plexo"
 UNIT_NAME="plexo-daemon.service"
 
 systemctl --user disable --now "$UNIT_NAME" 2>/dev/null || true
@@ -13,10 +13,13 @@ rm -f "$HOME/.local/bin/plexo-ctl"
 
 if command -v omarchy >/dev/null 2>&1; then
   omarchy plugin disable "$PLUGIN_ID" 2>/dev/null || true
-  # The previous name's id, if this is an upgraded install.
+  # Earlier names, if this is an upgraded install.
+  omarchy plugin disable "omega.plexo" 2>/dev/null || true
   omarchy plugin disable "omega.braid" 2>/dev/null || true
 fi
-rm -rf "$HOME/.config/omarchy/plugins/$PLUGIN_ID" "$HOME/.config/omarchy/plugins/omega.braid"
+rm -rf "$HOME/.config/omarchy/plugins/$PLUGIN_ID" \
+  "$HOME/.config/omarchy/plugins/omega.plexo" \
+  "$HOME/.config/omarchy/plugins/omega.braid"
 
 # The optional system-wide helper (root-owned, from install.sh's last step).
 # `sudo` can only run the helper itself, so removing root-owned files may need
@@ -38,4 +41,4 @@ if [[ "$HELPER_REMOVED" == 0 ]] && [[ -x "$HELPER_DST" || -e "$SUDOERS_FILE" ]];
   printf 'To remove the system-wide helper as well: sudo rm -f %s %s\n' "$SUDOERS_FILE" "$HELPER_DST"
 fi
 
-printf 'Omega Plexo plugin removed. The daemon build stays in the source tree; ~/.config/Plexo was not touched.\n'
+printf 'oma-plexo plugin removed. The daemon build stays in the source tree; ~/.config/Plexo was not touched.\n'

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "omega.plexo",
-  "name": "Omega Plexo",
+  "id": "omega.oma-plexo",
+  "name": "oma-plexo",
   "version": "0.2.0",
   "author": "omega",
   "license": "MIT",
-  "description": "Multi-network downloads, from the bar. Omega Plexo drives Plexo's engine headlessly (built on Plexo by Anmol Kapil, MIT): the bar shows the machine's live internet speed across every connected network, starts and controls downloads, and can optionally send every app's traffic over all links at once.",
+  "description": "Multi-network downloads, from the bar. oma-plexo drives Plexo's engine headlessly (built on Plexo by Anmol Kapil, MIT): the bar shows the machine's live internet speed across every connected network, starts and controls downloads, and can optionally send every app's traffic over all links at once.",
   "kinds": ["bar-widget", "panel"],
   "keepLoaded": true,
   "entryPoints": {
@@ -13,7 +13,7 @@
     "panel": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Omega Plexo",
+    "displayName": "oma-plexo",
     "description": "The machine's live internet speed over every network. Click for downloads and per-link control.",
     "category": "Network",
     "allowMultiple": false,

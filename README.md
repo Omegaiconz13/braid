@@ -1,37 +1,37 @@
-# Omega Plexo
+# oma-plexo
 
 Multi-network downloads for [Omarchy](https://omarchy.org) — from the bar, with
 the app closed: every connected link pulls at once, and one switch can put the
 whole machine's internet over all of them.
 
-Omega Plexo is the Omarchy face of **[Plexo](https://github.com/anmolkapil/plexo)**'s
-download engine: a Quickshell plugin (`omega.plexo`) plus a headless daemon
+oma-plexo is the Omarchy face of **[Plexo](https://github.com/anmolkapil/plexo)**'s
+download engine: a Quickshell plugin (`omega.oma-plexo`) plus a headless daemon
 (`plexo-daemon`) that runs the engine under plain Node as a systemd user
 service. No window needed — downloads keep running, resume after a reboot, and
 the bar shows the machine's live internet speed across every network.
 
-| Piece                | What it is                                                                                                                                                 |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`plexo-daemon`**   | Plexo's engine (HTTP + torrent, sockets bound per interface) under plain Node, as a systemd user service. Downloads while the app is closed.               |
-| **`omega.plexo`**    | The Quickshell plugin: a bar widget showing the machine's live internet speed across every link, and a panel with downloads, per-link speeds and controls. |
-| **System-wide mode** | Optional: a multipath default route over every live uplink, so all apps' connections spread across links (root helper + narrowed sudoers rule).            |
+| Piece                 | What it is                                                                                                                                                 |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`plexo-daemon`**    | Plexo's engine (HTTP + torrent, sockets bound per interface) under plain Node, as a systemd user service. Downloads while the app is closed.               |
+| **`omega.oma-plexo`** | The Quickshell plugin: a bar widget showing the machine's live internet speed across every link, and a panel with downloads, per-link speeds and controls. |
+| **System-wide mode**  | Optional: a multipath default route over every live uplink, so all apps' connections spread across links (root helper + narrowed sudoers rule).            |
 
 ## Credit
 
 The download engine, the app, and the bulk of this repository are
 **[Plexo](https://github.com/anmolkapil/plexo) by Anmol Kapil** (MIT) — this
-project would not exist without it. Omega Plexo adds the Omarchy plugin, the headless
+project would not exist without it. oma-plexo adds the Omarchy plugin, the headless
 daemon scaffolding and the system-wide multipath helper, and is published with
 the original license and copyright notices intact (see [LICENSE](LICENSE); the
 original readme is kept as [README.plexo.md](README.plexo.md)).
 
-If you like Omega Plexo, please star [Plexo](https://github.com/anmolkapil/plexo) too.
+If you like oma-plexo, please star [Plexo](https://github.com/anmolkapil/plexo) too.
 
 ## Install
 
 ```bash
-git clone https://github.com/Omegaiconz13/omega-plexo
-cd omega-plexo
+git clone https://github.com/Omegaiconz13/oma-plexo
+cd oma-plexo
 npm ci --ignore-scripts && npx patch-package   # once; the patches teach the
                                                # torrent engine to pin peers
 ./packaging/omarchy/install.sh
@@ -46,5 +46,5 @@ stay).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Original work © 2026 Anmol Kapil (Plexo); Omega Plexo
-additions © 2026 the Omega Plexo contributors.
+MIT — see [LICENSE](LICENSE). Original work © 2026 Anmol Kapil (Plexo); oma-plexo
+additions © 2026 the oma-plexo contributors.

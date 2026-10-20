@@ -82,7 +82,7 @@ export interface DaemonStatus {
   /** Download here means the daemon: bytes a second over every running download. */
   speedBytesPerSec: number
   /** The whole machine this second: live traffic over every connected network — all apps, not
-   * only Omega Plexo's downloads — with the same reading split per network. */
+   * only oma-plexo's downloads — with the same reading split per network. */
   throughput: {
     rxBytesPerSec: number
     txBytesPerSec: number

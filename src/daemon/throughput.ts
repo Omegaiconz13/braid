@@ -2,7 +2,7 @@
  * The machine's live internet speed: per-network byte counters from sysfs, turned into rates.
  *
  * The daemon samples this on its status tick and the bar widget shows the total, so "the speed
- * of the internet" is real traffic over every connected network — Omega Plexo's downloads, browsers,
+ * of the internet" is real traffic over every connected network — oma-plexo's downloads, browsers,
  * updates, everything — whether one link is up or five.
  */
 import { readFileSync } from 'node:fs'

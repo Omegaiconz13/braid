@@ -9,12 +9,12 @@ import qs.Commons
 import qs.Ui
 import "Plexo.js" as Fmt
 
-// The Omega Plexo panel: what the daemon is doing and the controls for it. It reads
+// The oma-plexo panel: what the daemon is doing and the controls for it. It reads
 // live state from its bar widget (hostWidget), which owns the watch process.
 Panel {
   id: root
-  moduleName: "omega.plexo"
-  ipcTarget: "omega.plexo"
+  moduleName: "omega.oma-plexo"
+  ipcTarget: "omega.oma-plexo"
   // The bar widget owns the plugin's single IpcHandler.
   manageIpc: false
 
@@ -180,7 +180,7 @@ Panel {
             spacing: Style.space(2)
 
             Text {
-              text: "Omega Plexo"
+              text: "oma-plexo"
               color: root.fg
               font.family: root.ff
               font.pixelSize: Style.font.title
