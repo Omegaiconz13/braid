@@ -112,6 +112,10 @@ What it does (through the root helper `plexo-multipath`):
 
 - installs a multipath default route with one nexthop per live uplink (equal
   weights; a link that NetworkManager rates below `full` is left out);
+- re-weights that route from the daemon's **link-health probes** — TCP
+  handshakes every ten seconds per network, so a link that starts dropping
+  handshakes gets fewer new flows (or none, until it answers again) without
+  disturbing the connections it already carries;
 - raises `net.ipv4.fib_multipath_hash_policy` to L4, so the kernel spreads
   **parallel connections** — many tabs, package downloads, torrents, containers
   — across the links, and their bandwidths add up system-wide;

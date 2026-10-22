@@ -29,7 +29,48 @@ Panel {
   readonly property string ff: bar ? bar.fontFamily : Style.font.family
   readonly property bool connected: host ? host.connected === true : false
   readonly property var downloads: host ? (host.activeDownloads || []) : []
+  /** The model the downloads Repeater binds to. `downloads` is a fresh array
+   * from every status tick, and a Repeater tears down and rebuilds all its
+   * delegates whenever its model's identity changes — flickering progress
+   * bars, once a second, forever. This copy changes identity only when the
+   * list's contents actually changed. */
+  property var downloadList: []
+  property string _downloadsFingerprint: ""
+  onDownloadsChanged: {
+    var list = root.downloads
+    var fingerprint = ""
+    for (var i = 0; i < list.length; i++) {
+      var d = list[i]
+      fingerprint += d.id + "\u0001" + d.status + "\u0001" + d.fileName + "\u0001" +
+        d.bytesDownloaded + "\u0001" + d.totalBytes + "\u0001" + d.speedBytesPerSec + "\u0002"
+      var nets = d.networks || []
+      for (var j = 0; j < nets.length; j++) {
+        fingerprint += nets[j].id + "\u0003" + nets[j].enabled + "\u0003" +
+          Math.round(nets[j].speedBytesPerSec / 1024) + "\u0004"
+      }
+    }
+    if (fingerprint === root._downloadsFingerprint) return
+    root._downloadsFingerprint = fingerprint
+    root.downloadList = list.slice()
+  }
   readonly property var networks: host ? (host.networks || []) : []
+  /** Same identity-stability treatment as downloadList: `networks` is a fresh
+   * array on every status tick, and the Repeater must not rebuild its rows
+   * unless the contents really changed (id, display name, kind, addresses). */
+  property var networkList: []
+  property string _networksFingerprint: ""
+  onNetworksChanged: {
+    var list = root.networks
+    var fingerprint = ""
+    for (var i = 0; i < list.length; i++) {
+      var n = list[i]
+      fingerprint += n.id + "\u0001" + (n.displayName || "") + "\u0001" + n.kind + "\u0001" +
+        (n.addresses || []).map(function (a) { return a.address }).join(",") + "\u0002"
+    }
+    if (fingerprint === root._networksFingerprint) return
+    root._networksFingerprint = fingerprint
+    root.networkList = list.slice()
+  }
   readonly property var preferences: host ? (host.networkPreferences || {}) : ({})
   readonly property real totalSpeed: host ? (host.speed || 0) : 0
   readonly property var throughput: host ? (host.throughput || null) : null
@@ -54,11 +95,61 @@ Panel {
     return "↓ " + (Fmt.fmtSpeed(rate.rxBytesPerSec) || "0 B/s")
   }
 
+  // ---------- link health (TCP probes, see daemon/linkHealth.ts) ----------
+  readonly property var linkHealth: host ? (host.linkHealth || []) : []
+  property bool testingLinks: false
+
+  function healthOf(id) {
+    var list = linkHealth || []
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
+    return null
+  }
+
+  function healthColor(id) {
+    var health = healthOf(id)
+    if (!health || health.state === "unknown") return Color.muted
+    if (health.state === "dead") return Color.urgent
+    if (health.state === "degraded") return "#d7a34a"
+    return Color.accent
+  }
+
+  function healthText(id) {
+    var health = healthOf(id)
+    if (root.testingLinks) return "testing…"
+    if (!health || health.state === "unknown") return "checking…"
+    if (health.state === "dead") return "no TCP"
+    var rtt =
+      health.rttMs !== null && health.rttMs !== undefined ? Math.round(health.rttMs) + " ms" : ""
+    if (health.state === "degraded") {
+      if (health.lossPct > 0) return health.lossPct + "% loss" + (rtt ? " · " + rtt : "")
+      return "slow" + (rtt ? " · " + rtt : "")
+    }
+    return rtt || "good"
+  }
+
+  function testLinks() {
+    if (root.testingLinks) return
+    root.testingLinks = true
+    root.call("testLinks", {})
+  }
+
   // Panel actions go through `plexo-ctl` one at a time, and a refusal (bad
   // link, daemon gone, helper missing) becomes `notice` instead of being
   // dropped: a fire-and-forget call would leave the user guessing.
   property var actionQueue: []
   property bool actionBusy: false
+  /** The multipath on/off call runs as root through sudo and can take a while;
+   * the switch shows busy for exactly that call so it neither looks dead nor
+   * takes a second click that queues a no-op flip. */
+  readonly property bool multipathBusy: {
+    if (!actionBusy || actionQueue.length === 0) return false
+    return actionQueue[0].method === "multipath"
+  }
+  /** Same for the per-network preference toggles (updateSettings in flight). */
+  readonly property bool preferenceBusy: {
+    if (!actionBusy || actionQueue.length === 0) return false
+    return actionQueue[0].method === "updateSettings"
+  }
 
   function call(method, params) {
     if (!host) return
@@ -77,13 +168,18 @@ Panel {
 
   function finishAction(code) {
     var job = actionQueue.length > 0 ? actionQueue[0] : null
+    if (job && job.method === "testLinks") root.testingLinks = false
     if (code !== 0) {
       var message = String(actionErr.text || "").trim()
       notice = message !== "" ? message : "The daemon refused the call (plexo-ctl exited with " + code + ")."
-    } else if (job && job.method === "start") {
-      // A good start means the link is taken; a refusal leaves it in the
-      // field so it can be fixed and retried.
-      linkText = ""
+    } else {
+      // A good call clears the last refusal: whatever it said has been fixed.
+      notice = ""
+      if (job && job.method === "start") {
+        // A good start means the link is taken; a refusal leaves it in the
+        // field so it can be fixed and retried.
+        linkText = ""
+      }
     }
     actionQueue = actionQueue.length > 0 ? actionQueue.slice(1) : []
     actionBusy = false
@@ -253,14 +349,29 @@ Panel {
           width: parent.width
           spacing: Style.space(6)
 
-          PanelSectionHeader {
-            text: "NETWORKS"
-            foreground: root.fg
-            fontFamily: root.ff
+          RowLayout {
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader {
+              Layout.fillWidth: true
+              text: "NETWORKS"
+              foreground: root.fg
+              fontFamily: root.ff
+            }
+
+            Button {
+              text: root.testingLinks ? "Testing…" : "Test links"
+              bordered: true
+              enabled: !root.testingLinks && root.networks.length > 0
+              foreground: root.fg
+              accent: Color.accent
+              onClicked: root.testLinks()
+            }
           }
 
           Repeater {
-            model: root.networks
+            model: root.networkList
 
             Item {
               required property var modelData
@@ -305,6 +416,23 @@ Panel {
                   }
                 }
 
+                Rectangle {
+                  Layout.alignment: Qt.AlignVCenter
+                  width: Style.space(7)
+                  height: width
+                  radius: width / 2
+                  color: root.healthColor(modelData.id)
+                }
+
+                Text {
+                  Layout.alignment: Qt.AlignVCenter
+                  textFormat: Text.PlainText
+                  text: root.healthText(modelData.id)
+                  color: Qt.darker(root.fg, 1.4)
+                  font.family: root.ff
+                  font.pixelSize: Style.font.caption
+                }
+
                 Text {
                   textFormat: Text.PlainText
                   text: root.linkDownText(modelData.id)
@@ -319,6 +447,7 @@ Panel {
                     var entry = root.preferences[modelData.id]
                     return !(entry && entry.off === true)
                   }
+                  busy: root.preferenceBusy
                   foreground: root.fg
                   accent: Color.accent
                   // Same no-value signal: `checked` is the state before the
@@ -381,11 +510,16 @@ Panel {
                   if (state.available !== true) {
                     return "One-time setup needed: run packaging/omarchy/install.sh once (it asks for sudo), then toggle again."
                   }
+                  if (root.multipathBusy) return "Applying the new routing…"
                   if (state.error) return state.error
                   if (state.on !== true) return "Off — every app shares one network at a time"
-                  var names = root.systemWideLinks.map(function (link) { return link.dev }).join(" + ")
+                  var names = root.systemWideLinks.map(function (link) {
+                    var weight = Number(link.weight) || 1
+                    return link.dev + (weight > 1 ? " ×" + weight : "")
+                  }).join(" + ")
                   var pins = Number(state.pins) > 0 ? " · " + state.pins + " open connections pinned to their network" : ""
-                  return "On — " + (names || "live networks") + " share the load" + pins
+                  var auto = root.systemWideLinks.length > 1 ? " · weights follow link health" : ""
+                  return "On — " + (names || "live networks") + " share the load" + pins + auto
                 }
                 color: {
                   var state = root.systemWide
@@ -400,7 +534,8 @@ Panel {
               // ToggleSwitch.toggled() carries no value (the caller owns
               // `checked`): a click means "flip what is showing".
               checked: root.systemWideOn
-              enabled: root.systemWide ? root.systemWide.available === true : false
+              busy: root.multipathBusy
+              enabled: !root.multipathBusy && (root.systemWide ? root.systemWide.available === true : false)
               foreground: root.fg
               accent: Color.accent
               onToggled: root.call("multipath", { action: root.systemWideOn ? "off" : "on" })
@@ -410,7 +545,7 @@ Panel {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "Parallel connections spread over the networks, so their speeds add up. A single stream still uses one network — bonding one stream would need a relay server somewhere."
+            text: "Parallel connections spread over the networks, so their speeds add up. Links that stop answering TCP probes drop out of the split until they recover. A single stream still uses one network — bonding one stream would need a relay server somewhere."
             color: Qt.darker(root.fg, 1.5)
             font.family: root.ff
             font.pixelSize: Style.font.caption
@@ -432,7 +567,7 @@ Panel {
           }
 
           Repeater {
-            model: root.downloads
+            model: root.downloadList
 
             Column {
               id: downloadRow

@@ -40,6 +40,27 @@ BarWidget {
   readonly property var systemWide: status ? (status.systemWide || null) : null
   readonly property bool systemWideOn: systemWide ? systemWide.on === true : false
   readonly property var systemWideLinks: systemWide && systemWide.links ? systemWide.links : []
+  // TCP health per network from the daemon's own probes (linkHealth.ts).
+  readonly property var linkHealth: status ? (status.health || []) : []
+
+  function healthOf(id) {
+    var list = linkHealth || []
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i]
+    return null
+  }
+
+  /** One short phrase for the tooltip: "good 22 ms", "34% loss · 180 ms", "no TCP". */
+  function healthLabel(id) {
+    var health = healthOf(id)
+    if (!health || health.state === "unknown") return "checking…"
+    if (health.state === "dead") return "no TCP"
+    var rtt = health.rttMs !== null && health.rttMs !== undefined ? Math.round(health.rttMs) + " ms" : ""
+    if (health.state === "degraded") {
+      var why = health.lossPct > 0 ? health.lossPct + "% loss" : "slow"
+      return why + (rtt ? " · " + rtt : "")
+    }
+    return rtt || "good"
+  }
   // The downloads worth showing: live ones plus failures, which stay until the
   // panel's Remove button dismisses them.
   readonly property var activeDownloads: downloads.filter(function (d) {
@@ -78,6 +99,8 @@ BarWidget {
       if (payload && payload.daemon) {
         root.status = payload
         root.connected = true
+        root._watchFailures = 0
+        restart.interval = 2000
         stale.restart()
       }
     } else if (value.event === "networksChanged" || value.event === "historyChanged") {
@@ -94,10 +117,18 @@ BarWidget {
     stdout: SplitParser {
       onRead: function (line) { root.applyLine(line) }
     }
-    onExited: restart.restart()
+    onExited: {
+      // Back off: a daemon that is down must not be retried with a fresh
+      // Node process every 2 seconds forever. Each consecutive failure
+      // doubles the wait (2s, 4s, 8s … 30s); one good status line resets it.
+      root._watchFailures = Math.min(root._watchFailures + 1, 4)
+      restart.interval = 2000 * Math.pow(2, root._watchFailures - 1)
+      restart.restart()
+    }
   }
 
-  // A daemon that is starting, stopping or absent: try again shortly.
+  // A daemon that is starting, stopping or absent: try again shortly, with
+  // the backoff set by the watch process's last exit.
   Timer {
     id: restart
     interval: 2000
@@ -110,6 +141,8 @@ BarWidget {
     interval: 6000
     onTriggered: root.connected = false
   }
+
+  property int _watchFailures: 0
 
   // ---------- panel wiring (the stock bar-widget contract) ----------
 
@@ -189,7 +222,7 @@ BarWidget {
         var up = Fmt.fmtSpeed(rate.txBytesPerSec)
         if (down || up) speeds = " " + (down ? "↓ " + down : "") + (up ? (down ? " " : "") + "↑ " + up : "")
       }
-      lines.push("  " + (network.displayName || network.device) + speeds + " · " + network.addresses.map(function (a) {
+      lines.push("  " + (network.displayName || network.device) + " · " + healthLabel(network.id) + speeds + " · " + network.addresses.map(function (a) {
         return a.address
       }).join(", "))
     }
