@@ -84,16 +84,17 @@ HELPER_DST="/usr/local/libexec/plexo-multipath"
 SUDOERS_FILE="/etc/sudoers.d/plexo-multipath"
 HELPER_OK=0
 # Up to date means: the installed script matches this checkout and the rule
-# grants exactly `up` and `down` without a password.
+# grants exactly `up`, `down` and `weights` without a password.
 if [[ -x "$HELPER_DST" ]] && cmp -s "$HELPER_SRC" "$HELPER_DST" &&
-  sudo -n -l "$HELPER_DST" up >/dev/null 2>&1 && sudo -n -l "$HELPER_DST" down >/dev/null 2>&1; then
+  sudo -n -l "$HELPER_DST" up >/dev/null 2>&1 && sudo -n -l "$HELPER_DST" down >/dev/null 2>&1 &&
+  sudo -n -l "$HELPER_DST" weights >/dev/null 2>&1; then
   HELPER_OK=1
 fi
 if [[ "$HELPER_OK" == 0 ]] && { sudo -n true 2>/dev/null || [[ -t 0 ]]; }; then
   say "Installing the system-wide helper (sudo)…"
   sudo install -D -m 0755 "$HELPER_SRC" "$HELPER_DST"
   TMP_RULE="$(mktemp)"
-  printf '%s ALL=(root) NOPASSWD: %s up, %s down\n' "$(id -un)" "$HELPER_DST" "$HELPER_DST" >"$TMP_RULE"
+  printf '%s ALL=(root) NOPASSWD: %s up, %s down, %s weights\n' "$(id -un)" "$HELPER_DST" "$HELPER_DST" "$HELPER_DST" >"$TMP_RULE"
   if sudo visudo -cf "$TMP_RULE" >/dev/null 2>&1; then
     sudo install -m 0440 -o root -g root "$TMP_RULE" "$SUDOERS_FILE"
     HELPER_OK=1
@@ -103,11 +104,11 @@ if [[ "$HELPER_OK" == 0 ]] && { sudo -n true 2>/dev/null || [[ -t 0 ]]; }; then
   rm -f "$TMP_RULE"
 fi
 if [[ "$HELPER_OK" == 1 ]]; then
-  say "System-wide helper: $HELPER_DST (passwordless for $(id -un), up/down only)"
+  say "System-wide helper: $HELPER_DST (passwordless for $(id -un), up/down/weights only)"
 else
   say "System-wide helper: not installed, or out of date. For the SYSTEM-WIDE INTERNET switch, run:"
   say "  sudo install -D -m 0755 \"$HELPER_SRC\" $HELPER_DST"
-  say "  printf '%s ALL=(root) NOPASSWD: $HELPER_DST up, $HELPER_DST down\\n' \"\$(id -un)\" | sudo tee $SUDOERS_FILE >/dev/null"
+  say "  printf '%s ALL=(root) NOPASSWD: $HELPER_DST up, $HELPER_DST down, $HELPER_DST weights\\n' \"\$(id -un)\" | sudo tee $SUDOERS_FILE >/dev/null"
   say "  sudo chmod 0440 $SUDOERS_FILE"
 fi
 

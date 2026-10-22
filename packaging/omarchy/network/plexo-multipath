@@ -11,6 +11,9 @@
 #   plexo-multipath status   (any user)  whether this script's routes are live
 #   plexo-multipath up       (root)      pin open connections, then share the default
 #   plexo-multipath down     (root)      remove this script's routes; NM takes over
+#   plexo-multipath weights  (root)      re-weight the shared default from the
+#                                        daemon's link-health file (pins open
+#                                        connections first, like `up`)
 #
 # How it works, and what it deliberately does not touch:
 #   - Every route this script owns is tagged with a route protocol, so it can be
@@ -90,18 +93,20 @@ unmark() { if [ "$1" = "-" ]; then printf ''; else printf '%s' "$1"; fi; }
 
 # dev<TAB>via<TAB>src: one line per uplink that currently has a default
 # route, best metric per device, in that order.
+#
+# Read as JSON (`ip -j`): the text format prints multipath routes with their
+# nexthops on continuation lines whose only fields are via/dev/weight — no
+# metric — so a text parser reads a script-owned route's nexthops as metric-0
+# uplinks and re-installs the script's own stale gateways forever (see
+# status_core for the same trap). JSON gives one object per route with its
+# protocol, so the script's own default (proto 88) is excluded here and only
+# NetworkManager's own routes count as uplinks. `up` runs on every network
+# change; after a DHCP renew it must see the new gateway, not the old one.
 link_rows() {
-  "$IP" -4 route show default | awk '
-    {
-      dev = ""; via = ""; src = ""; metric = ""
-      for (i = 1; i <= NF; i++) {
-        if ($i == "dev")    dev    = $(i + 1)
-        if ($i == "via")    via    = $(i + 1)
-        if ($i == "src")    src    = $(i + 1)
-        if ($i == "metric") metric = $(i + 1)
-      }
-      if (dev != "") printf "%s\t%s\t%s\t%s\n", dev, (via == "" ? "-" : via), (src == "" ? "-" : src), (metric == "" ? 0 : metric)
-    }' | sort -t "$(printf '\t')" -k4 -n | awk -F '\t' '!seen[$1]++'
+  "$IP" -j -4 route show default 2>/dev/null | "$JQ" -r '
+    .[] | select(.protocol != "88")
+    | [(.dev // ""), (.gateway // ""), (.prefsrc // ""), (.metric // 0)]
+    | @tsv' | sort -t "$(printf '\t')" -k4 -n | awk -F '\t' '!seen[$1]++'
 }
 
 # dev<TAB>via<TAB>src<TAB>1 : the links `up` would install. A candidate is any
@@ -278,7 +283,79 @@ case "${1:-}" in
     status_core
     ;;
 
+  weights)
+    [ "$(id -u)" -eq 0 ] || die 'must run as root (the daemon calls this through sudo)' 3
+
+    links=$(live_links)
+    count=$(printf '%s' "$links" | grep -c . || true)
+    if [ "$count" -eq 0 ]; then
+      die 'no uplink with a default route and working connectivity was found' 2
+    fi
+
+    # Desired shares come from the daemon: one "dev weight" line, written to the
+    # calling user's home. Validate every field; the file is user-owned, so a
+    # stray line must never reach `ip route`.
+    declare -A wanted=()
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+      home=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+      if [ -n "$home" ] && [ -f "$home/.cache/plexo/multipath-weights" ]; then
+        while read -r wdev wweight _rest; do
+          is_ifname "$wdev" || continue
+          case "$wweight" in ''|*[!0-9]*) continue ;; esac
+          [ "$wweight" -le 16 ] || continue
+          wanted["$wdev"]="$wweight"
+        done <"$home/.cache/plexo/multipath-weights"
+      fi
+    fi
+
+    # Resolve a weight per live link and count the ones that stay in the route.
+    # When every link is excluded (a burst of failed probes, or a stale file),
+    # keep them all at equal weight instead of cutting the machine off.
+    rows=""
+    kept=0
+    while IFS="$(printf '\t')" read -r dev via src _weight; do
+      [ -n "$dev" ] || continue
+      is_ifname "$dev" || continue
+      is_ipv4 "$via" || continue
+      w=${wanted[$dev]:-1}
+      [ "$w" -gt 0 ] && kept=$((kept + 1))
+      rows="$rows$dev	$via	$w
+"
+    done <<< "$links"
+    if [ "$kept" -eq 0 ]; then
+      rows=$(printf '%s' "$rows" | awk -F '\t' 'BEGIN { OFS = "\t" } { $3 = 1; print }')
+    fi
+
+    # Pin connections that are already open before the weights change: their
+    # flow hash may now map to another link, and keeping the old uplink (and
+    # source address) means no live stream is torn mid-transfer.
+    while IFS="$(printf '\t')" read -r peer dev via src; do
+      via=$(unmark "$via")
+      src=$(unmark "$src")
+      [ -n "$peer" ] || continue
+      is_ipv4 "$peer" || continue
+      is_ifname "$dev" || continue
+      if [ -n "$via" ]; then
+        "$IP" route replace "$peer/32" proto "$PROTO_PIN" via "$via" dev "$dev" ${src:+src "$src"} 2>/dev/null || true
+      else
+        "$IP" route replace "$peer/32" proto "$PROTO_PIN" dev "$dev" ${src:+src "$src"} 2>/dev/null || true
+      fi
+    done <<< "$(pin_rows)"
+
+    args=(-4 route replace default proto "$PROTO_DEFAULT" metric "$METRIC_DEFAULT")
+    while IFS="$(printf '\t')" read -r dev via w; do
+      [ -n "$dev" ] || continue
+      [ "$w" -gt 0 ] || continue
+      args+=(nexthop via "$via" dev "$dev" weight "$w")
+    done <<< "$rows"
+    if ! "$IP" "${args[@]}"; then
+      die 'could not update the multipath weights' 4
+    fi
+
+    status_core
+    ;;
+
   *)
-    die "unknown command: '${1:-}' (expected plan, status, up or down)" 64
+    die "unknown command: '${1:-}' (expected plan, status, up, down or weights)" 64
     ;;
 esac
