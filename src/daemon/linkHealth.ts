@@ -4,9 +4,12 @@
  * ICMP lies. The campus Wi-Fi that started this project answered pings in 2 ms and still
  * dropped half of the packets under load; a bulk TCP flow over it collapsed while `ping`
  * looked perfect. These probes are therefore TCP handshakes — connect to a public anycast
- * address, then close — bound to the network's own IPv4 address, the same way the engine
- * binds its chunk connections. A completed handshake proves the path can carry a TCP flow
- * in both directions, and its duration is the round trip the engine's next connection sees.
+ * address, then close — through the engine's own connection path (SO_BINDTODEVICE to the
+ * interface, the interface's IPv4 as source), so a probe measures exactly what a chunk
+ * connection measures. Binding the address alone is not enough under the multipath default:
+ * the kernel's flow hash may send the probe out a different link carrying this one's source
+ * IP, a packet that link's network drops — and a healthy link reads dead, the verdict that
+ * keeps it out of the route, and only its own probes can never disprove.
  *
  * The monitor keeps a short sliding window per network and classifies it:
  *
@@ -19,7 +22,37 @@
  * flows, degraded one, dead none. `plexo-ctl testLinks` runs a burst on demand for the
  * panel's "Test links" button.
  */
-import { connect } from 'node:net'
+import { performance } from 'node:perf_hooks'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
+import type { Socket } from 'node:net'
+import type { NetworkRoute } from '../main/network/routes'
+
+/** The engine's connection path (SO_BINDTODEVICE), loaded lazily: importing it pulls
+ * koffi and the libc surface, which the pure classification half of this file — the
+ * half the unit tests exercise — must not need to load. Resolved relative to this
+ * file at runtime: `import.meta.url` in the ESM the tests run, and __filename in the
+ * CommonJS the daemon build emits (esbuild leaves import.meta an empty shim there). */
+type ConnectRoute = (route: NetworkRoute, port: number) => Socket
+let connectRoute: ConnectRoute | null = null
+function engineConnect(): ConnectRoute {
+  if (!connectRoute) {
+    const here =
+      typeof __filename === 'string'
+        ? __filename
+        : typeof import.meta.url === 'string' && import.meta.url.startsWith('file:')
+          ? fileURLToPath(import.meta.url)
+          : (() => {
+              throw new Error('No base path to resolve the engine connection module from')
+            })()
+    connectRoute = (
+      createRequire(here)('../main/network/deviceBinding') as {
+        connectRoute: ConnectRoute
+      }
+    ).connectRoute
+  }
+  return connectRoute
+}
 
 /** Anycast addresses with a TCP listener on 443. Overridable for tests
  * (PLEXO_PROBE_HOSTS="10.0.0.1,10.0.0.2"). */
@@ -118,6 +151,7 @@ export function weightsFor(links: LinkHealth[]): Map<string, number> | null {
 }
 
 function probeTcp(
+  device: string,
   localAddress: string,
   host: string,
   timeoutMs = PROBE_TIMEOUT_MS
@@ -125,7 +159,15 @@ function probeTcp(
   return new Promise((resolve) => {
     const started = performance.now()
     let settled = false
-    const socket = connect({ host, port: PROBE_PORT, localAddress })
+    // Through the engine's own connection path: SO_BINDTODEVICE pins the socket to
+    // the interface itself, not just its address. A probe bound to the address alone
+    // follows the multipath default route, whose flow hash may send it out another
+    // link carrying this one's source IP — a packet that link's network drops, and a
+    // healthy link reads dead forever (the very verdict that keeps it excluded).
+    const socket: Socket = engineConnect()(
+      { device, localAddress, remoteAddress: host, family: 4 },
+      PROBE_PORT
+    )
     const finish = (ok: boolean): void => {
       if (settled) return
       settled = true
@@ -143,7 +185,9 @@ function probeTcp(
 
 export interface ProbeNetwork {
   id: string
-  /** The network's IPv4 address; probes bind it, as the engine's connections do. */
+  /** The interface's device name: the probe binds it, exactly as the engine's connections do. */
+  device: string
+  /** The network's IPv4 address; the probe's source address, as the engine's are. */
   address: string | null
 }
 
@@ -199,7 +243,7 @@ export class LinkHealthMonitor {
     const at = Date.now()
     try {
       const results = await Promise.all(
-        probeHosts().map((host) => probeTcp(network.address as string, host))
+        probeHosts().map((host) => probeTcp(network.device, network.address as string, host))
       )
       const window = this.attempts.get(network.id) ?? []
       for (const rttMs of results) window.push({ ok: rttMs !== null, rttMs, at })

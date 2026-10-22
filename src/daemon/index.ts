@@ -137,11 +137,13 @@ let server: ControlServer | null = null
 const multipath = new Multipath()
 const health = new LinkHealthMonitor()
 
-/** The monitor probes the same addresses the engine binds: one IPv4 per network. */
+/** The monitor probes the same way the engine connects: the interface's device
+ * (SO_BINDTODEVICE) and one IPv4 per network as the source address. */
 function syncHealthNetworks(list: NetworkInterfaceInfo[]): void {
   health.setNetworks(
     list.map((network) => ({
       id: network.id,
+      device: network.device,
       address: network.addresses.find((address) => address.family === 4)?.address ?? null
     }))
   )
