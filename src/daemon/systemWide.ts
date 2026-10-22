@@ -12,6 +12,9 @@
  * shows as-is. If the helper is missing, `available` is false and the panel says what to run.
  */
 import { execFile } from 'node:child_process'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 /** Overridable so tests (and the repository's own runs) can point at a stub. */
 export const HELPER_PATH =
@@ -20,6 +23,15 @@ export const HELPER_PATH =
 const STATUS_TIMEOUT_MS = 8000
 const MUTATION_TIMEOUT_MS = 25000
 const CACHE_MS = 4000
+/** Without the sudoers rule, do not ask again for this long after a refusal. */
+const REFUSED_RETRY_MS = 5 * 60_000
+
+/** Where the daemon writes the link-health weights the helper's `weights` verb reads.
+ * The helper runs as root and finds the calling user's home through SUDO_USER, so
+ * the path is fixed relative to the home directory. */
+export function weightsFilePath(): string {
+  return join(homedir(), '.cache', 'plexo', 'multipath-weights')
+}
 
 const SETUP_HINT =
   'System-wide mode needs its helper installed: run packaging/omarchy/install.sh once (it asks for sudo).'
@@ -55,6 +67,17 @@ interface RunResult {
   code: number
   stdout: string
   stderr: string
+}
+
+/** First non-empty error message in the text, or a fallback. */
+function errorMessage(text: string, fallback: string): string {
+  return (
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+      .pop() ?? fallback
+  )
 }
 
 function run(command: string, args: string[], timeoutMs: number): Promise<RunResult> {
@@ -95,6 +118,7 @@ function lastJsonLine(text: string): HelperOutput | null {
 export class Multipath {
   private cached: { at: number; value: MultipathState } | null = null
   private inFlight: Promise<MultipathState> | null = null
+  private weightsRefusedUntil = 0
 
   /** Current state, at most one helper call every few seconds. */
   async state(force = false): Promise<MultipathState> {
@@ -112,6 +136,54 @@ export class Multipath {
 
   async down(): Promise<MultipathState> {
     return this.mutate('down')
+  }
+
+  /** The uplinks `up` would install right now, without privileges. Null when the
+   * helper cannot answer (missing, or no uplink found): callers should then
+   * proceed with `up` anyway so the refusal surfaces as state the panel shows. */
+  async plan(): Promise<MultipathLink[] | null> {
+    const result = await run(HELPER_PATH, ['plan'], STATUS_TIMEOUT_MS)
+    if (result.code !== 0) return null
+    const output = lastJsonLine(result.stdout)
+    return Array.isArray(output?.links) ? output.links : null
+  }
+
+  /** True when these are the same links, gateway for gateway, as the other list:
+   * device set and each device's via. Weight is not compared — `up` always
+   * installs equal weights, and the health pass re-weights separately. */
+  static sameLinks(a: MultipathLink[], b: MultipathLink[]): boolean {
+    const key = (links: MultipathLink[]): Map<string, string> =>
+      new Map(links.map((link) => [link.dev, String(link.via ?? '')]))
+    const first = key(a)
+    const second = key(b)
+    if (first.size !== second.size) return false
+    for (const [dev, via] of first) {
+      if (!second.has(dev) || second.get(dev) !== via) return false
+    }
+    return true
+  }
+
+  /** Write the desired per-device shares for the `weights` verb. Written first,
+   * then applied: the helper never reads a half-written file. */
+  async writeWeights(weights: Map<string, number>): Promise<void> {
+    const file = weightsFilePath()
+    await mkdir(dirname(file), { recursive: true })
+    const tmp = `${file}.tmp`
+    const lines = [...weights.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([dev, weight]) => `${dev} ${weight}\n`)
+    await writeFile(tmp, lines.join(''), { mode: 0o644 })
+    await rename(tmp, file)
+  }
+
+  /** Re-weight the live multipath default without disturbing pinned connections. */
+  async applyWeights(): Promise<MultipathState> {
+    if (Date.now() < this.weightsRefusedUntil) {
+      return this.cached?.value ?? { available: true, on: false, links: [], pins: 0 }
+    }
+    const state = await this.mutate('weights')
+    if (state.error === SETUP_HINT) this.weightsRefusedUntil = Date.now() + REFUSED_RETRY_MS
+    return state
   }
 
   /** Daemon stop: put the machine back on NetworkManager's own routes. */
@@ -136,12 +208,16 @@ export class Multipath {
     }
     const output = lastJsonLine(result.stdout)
     if (result.code !== 0 || !output) {
+      // A failed read must not read as "the mode is off": the route may well be
+      // live, and callers act on `on` (the panel toggles, the daemon decides
+      // whether to re-`up`). Keep the last known state and attach the error.
+      const previous = this.cached?.value
       return this.remember({
         available: true,
-        on: false,
-        links: [],
-        pins: 0,
-        error: output?.error || result.stderr.trim() || 'the system-wide helper did not answer'
+        on: previous?.on ?? false,
+        links: previous?.links ?? [],
+        pins: previous?.pins ?? 0,
+        error: output?.error || errorMessage(result.stderr, 'the system-wide helper did not answer')
       })
     }
     return this.remember({
@@ -153,7 +229,7 @@ export class Multipath {
     })
   }
 
-  private async mutate(action: 'up' | 'down'): Promise<MultipathState> {
+  private async mutate(action: 'up' | 'down' | 'weights'): Promise<MultipathState> {
     // `sudo -n` never prompts: without the sudoers rule this fails immediately, and the
     // error below is what the panel shows.
     const result = await run('sudo', ['-n', HELPER_PATH, action], MUTATION_TIMEOUT_MS)
@@ -169,16 +245,18 @@ export class Multipath {
     }
 
     const output = lastJsonLine(result.stdout)
-    const stderr = result.stderr.trim()
+    const stderr = errorMessage(result.stderr, '')
     if (result.code !== 0 || !output || output.ok === false) {
       const refuses =
-        /password is required|no tty|a terminal is required|not allowed/i.test(stderr) ||
+        /password is required|no tty|a terminal is required|not allowed/i.test(result.stderr) ||
         /password is required|not allowed/i.test(output?.error ?? '')
       return this.remember({
         available: true,
-        on: false,
+        // A refused call must not read as a mode change: the route is whatever
+        // it was, and the panel's switch follows real state, not the attempt.
+        on: output?.up === true ? true : (this.cached?.value.on ?? false),
         links: output?.links ?? this.cached?.value.links ?? [],
-        pins: output?.pins ?? 0,
+        pins: output?.pins ?? this.cached?.value.pins ?? 0,
         error: refuses
           ? SETUP_HINT
           : output?.error || stderr || `the helper failed (${result.code})`

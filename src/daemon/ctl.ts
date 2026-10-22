@@ -23,7 +23,7 @@ Usage:
 Methods: status, networks, downloadList, history, clearHistory, settings, updateSettings,
          probe, start, pause, resume, cancel, remove, setNetwork, relink, reveal, openDownload,
          torrentFiles, chooseTorrentFiles, networkUsage, resetNetworkUsage, freeSpace,
-         multipath, shutdown
+         multipath, testLinks, shutdown
 
 Examples:
   plexo-ctl start '{"url":"https://example.com/ubuntu.iso"}'

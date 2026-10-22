@@ -21,7 +21,9 @@ import { probeUrl } from '../main/download/probe'
 import { deviceBindingSupported } from '../main/network/deviceBinding'
 import { NetworkMonitor } from '../main/network/interfaces'
 import { loadSettings, saveSettings } from '../main/settings'
+import type { NetworkInterfaceInfo } from '../shared/types'
 import { IpcChannels } from '../shared/ipc-channels'
+import { LinkHealthMonitor, weightsFor } from './linkHealth'
 import { socketPath, type DaemonStatus, type DownloadSummary } from './protocol'
 import { ControlServer, type DaemonHandler } from './server'
 import { Multipath } from './systemWide'
@@ -133,6 +135,52 @@ let manager: DownloadManager
 /** Assigned once the handlers exist; the network monitor and the engine stubs are wired before. */
 let server: ControlServer | null = null
 const multipath = new Multipath()
+const health = new LinkHealthMonitor()
+
+/** The monitor probes the same addresses the engine binds: one IPv4 per network. */
+function syncHealthNetworks(list: NetworkInterfaceInfo[]): void {
+  health.setNetworks(
+    list.map((network) => ({
+      id: network.id,
+      address: network.addresses.find((address) => address.family === 4)?.address ?? null
+    }))
+  )
+}
+
+/** Link-health weights for system-wide mode: good links take three shares of new
+ * flows, degraded one, dead none. Applied only when the route is actually on and
+ * the numbers changed; the helper pins open connections first, so nothing flips
+ * networks underneath a live stream. */
+let weightsBusy = false
+async function applyHealthWeights(): Promise<void> {
+  if (weightsBusy) return
+  weightsBusy = true
+  try {
+    const settings = await loadSettings()
+    if (settings.multipathEnabled !== true) return
+    const state = await multipath.state()
+    if (!state.on || state.links.length < 2) return
+    const desired = weightsFor(health.snapshot())
+    if (!desired) return
+    const current = new Map(
+      state.links.map((link) => [link.dev, Number(link.weight) || 1] as const)
+    )
+    let changed = false
+    for (const [dev, weight] of desired) {
+      if ((current.get(dev) ?? 1) !== weight) {
+        changed = true
+        break
+      }
+    }
+    if (!changed) return
+    await multipath.writeWeights(desired)
+    await multipath.applyWeights()
+  } catch {
+    // The route stays as it was; the next pass tries again.
+  } finally {
+    weightsBusy = false
+  }
+}
 
 /** Uplinks came or went: if system-wide mode is on, re-derive its links and pins shortly.
  * The delay lets a reconnect storm (Wi-Fi power save, USB re-enumeration) settle first. */
@@ -142,9 +190,22 @@ function scheduleMultipathRefresh(): void {
   multipathRefresh = setTimeout(() => {
     multipathRefresh = null
     // The saved preference, not the current route: a start-up that found no
-    // uplink yet must come up as soon as one connects. `up` is idempotent.
+    // uplink yet must come up as soon as one connects. `up` is idempotent —
+    // and gated: the privileged call only happens when the live uplinks (from
+    // the helper's own unprivileged `plan`) differ from what the installed
+    // route already carries, so address churn that leaves the gateways alone
+    // costs no `sudo` at all.
     void loadSettings()
-      .then((settings) => (settings.multipathEnabled === true ? multipath.up() : null))
+      .then(async (settings) => {
+        if (settings.multipathEnabled !== true) return
+        const state = await multipath.state()
+        if (!state.on) {
+          if (state.links.length === 0 || state.available === false) await multipath.up()
+          return
+        }
+        const planned = await multipath.plan()
+        if (planned === null || !Multipath.sameLinks(planned, state.links)) await multipath.up()
+      })
       .catch(() => {})
   }, 15000)
   multipathRefresh.unref()
@@ -234,12 +295,15 @@ async function main(): Promise<void> {
   const networks = new NetworkMonitor((list) => {
     manager.networksChanged()
     server?.broadcast('networksChanged', list)
+    syncHealthNetworks(list)
     scheduleMultipathRefresh()
   })
   manager = new DownloadManager(() => windowStub, networks)
   await manager.applySettings(await loadSettings())
   const bindingSupport = await deviceBindingSupported()
   const throughput = new ThroughputMeter()
+  syncHealthNetworks(networks.current ?? [])
+  health.start()
   // Sampled on the status tick below; a status request in between reads the latest second.
   let throughputSnapshot: ThroughputSnapshot = { rxBytesPerSec: 0, txBytesPerSec: 0, networks: [] }
 
@@ -267,6 +331,7 @@ async function main(): Promise<void> {
       })),
       networkPreferences: settings.networkPreferences ?? {},
       systemWide: await multipath.state(),
+      health: health.snapshot(),
       downloads,
       speedBytesPerSec: downloads.reduce((sum, download) => sum + download.speedBytesPerSec, 0),
       throughput: throughputSnapshot
@@ -324,6 +389,7 @@ async function main(): Promise<void> {
         const state = await multipath.up()
         // Remembered only once it is really on, so a failed enable retries next start.
         if (state.on) await saveSettings({ multipathEnabled: true })
+        // Equal weights are up now; the health pass re-weights on its next tick.
         return state
       }
       if (action === 'off') {
@@ -332,6 +398,11 @@ async function main(): Promise<void> {
         return state
       }
       return multipath.state(true)
+    },
+    /** On-demand link test for the panel: three quick rounds, then the verdict. */
+    testLinks: async () => {
+      await health.testNow()
+      return health.snapshot()
     },
     shutdown: async () => {
       setImmediate(() => void stop('requested'))
@@ -367,6 +438,11 @@ async function main(): Promise<void> {
   }, STATUS_TICK_MS)
   tick.unref()
 
+  // Health changes slowly; checking the route every ten seconds is plenty and
+  // keeps the privileged helper out of the one-second status path.
+  const weightsTick = setInterval(() => void applyHealthWeights(), 10_000)
+  weightsTick.unref()
+
   const bye = (): void => releaseLock()
   process.on('exit', bye)
   process.on('SIGTERM', () => void stop('SIGTERM'))
@@ -375,6 +451,7 @@ async function main(): Promise<void> {
 
 async function stop(reason: string): Promise<void> {
   console.log(`[plexo-daemon] stopping (${reason})`)
+  health.stop()
   await manager?.suspendAll().catch(() => {})
   // Routing is the daemon's to give back: stop leaves the machine on
   // NetworkManager's own default routes whoever asks for the stop.
