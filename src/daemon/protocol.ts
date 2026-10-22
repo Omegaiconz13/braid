@@ -78,6 +78,20 @@ export interface DaemonStatus {
     pins: number
     error?: string
   }
+  /** Per-network TCP health from the daemon's own probes (daemon/linkHealth.ts):
+   * what the panel's dot shows and what system-wide weights are derived from. */
+  health: {
+    id: string
+    state: 'good' | 'degraded' | 'dead' | 'unknown'
+    /** Median TCP handshake time in ms; null until a probe succeeds. */
+    rttMs: number | null
+    /** Failed probes / all probes in the window, 0..100. */
+    lossPct: number
+    /** 0..100: success rate with a latency penalty. */
+    score: number
+    attempts: number
+    checkedAt: number
+  }[]
   downloads: DownloadSummary[]
   /** Download here means the daemon: bytes a second over every running download. */
   speedBytesPerSec: number
